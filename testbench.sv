@@ -1,329 +1,342 @@
-// Code your testbench here
-// or browse Examples
 
 
 interface apb_if();
-    logic clk;
-   logic[31:0] paddr;
-  logic [7:0] pwdata;
-  logic penable;
-  logic psel;
-  logic [7:0]prdata;
-  logic pslverr;
-  logic pready;
-  logic pwrite ;
+  logic pclk;
   logic presetn;
+  logic psel;
+  logic penable;
+  logic pwrite;
+  logic [31:0] paddr;
+  logic [7:0] pwdata;
+  logic [7:0] prdata;
+  logic pready;
+  logic pslverr;
 endinterface
-class transaction ;
-  
-  
 
-  rand bit[31:0] paddr;
+
+class transaction;
+ 
+  rand bit [31:0] paddr;
   rand bit [7:0] pwdata;
-  bit penable;
-  bit psel;
-  bit [7:0]prdata;
-  bit pslverr;
+  rand bit psel;
+  rand bit penable;
+  randc bit pwrite;
+  bit [7:0] prdata;
   bit pready;
-  bit pwrite ;
-  bit presetn;
+  bit pslverr;
   
-  constraint cons_t{
-   paddr>=0;
-  paddr<=15;
+ 
+  
+  constraint addr_c {
+  paddr >= 0; paddr <= 15;////2 3 4
   }
   
-  constraint cons1{
-  
-  pwdata>=0;
-  pwdata<=255;
+  constraint data_c {
+  pwdata >= 0; pwdata <= 255; /// 2-9
   }
+  
   function void display(input string tag);
-    $display("[%0s]: paddr:%0d pwdata:%0d,pwrite:%0b,prdata:%0d,@%0t",tag ,paddr,pwdata,pwrite,prdata,pslverr,$time);
+    $display("[%0s] :  paddr:%0d  pwdata:%0d pwrite:%0b  prdata:%0d pslverr:%0b @ %0t",tag,paddr,pwdata, pwrite, prdata, pslverr,$time);
   endfunction
   
-endclass 
-
-
+endclass
+ 
+ 
+/////////////////////////////////////////
 class generator;
-  transaction tr;    ////////////
-  mailbox #(transaction)gen2drv;
-  int count=0;
-  event nextdrv;
-  event nextsco;
-  event done;
-  function new ( mailbox #(transaction)mbx);
-    this.gen2drv=mbx;
-     tr=new();
-  endfunction
   
-  task run();
-    repeat(count)
-      begin
-        assert(tr.randomize())else $error("randomization failed");
-        gen2drv.put(tr);
-        tr.display("GEN");
-        @(nextdrv);
-        @(nextsco);
-        
-      
-        
-      end
-    ->done;
-  endtask
+   transaction tr;
+   mailbox #(transaction) mbx;
+   int count = 0;
   
-  
-endclass 
-
-class driver;
-  transaction tr;
-  mailbox#(transaction) gen2drv;
-  virtual apb_if vif;
-  event nextdrv;
-  function new(mailbox#(transaction) mbx);
-    this.gen2drv=mbx;
-  endfunction
-  
-  
-  task reset ();
-    vif.presetn<=1'b0;
-    vif.psel<=1'b0;
-    vif.penable<=1'b0;
-    vif.pwdata<=0;
-    vif.pwrite<=1'b0;
-    vif.paddr<=0;
-    repeat(5)@( posedge vif.clk) ;
-    vif.presetn<=1'b1;
-    $display("[DRV]:reset done ");
+   event nextdrv; ///driver completed task of triggering interface
+   event nextsco; ///scoreboard completed its objective
+   event done; 
+   
+   
+  function new(mailbox #(transaction) mbx);
+      this.mbx = mbx;
+      tr=new();
+   endfunction; 
+ 
+   task run(); 
     
-    $display("------------------------------");
-  endtask 
+     repeat(count)   
+       begin    
+           assert(tr.randomize()) else $error("Randomization failed");  
+           mbx.put(tr);
+           tr.display("GEN");
+           @(nextdrv);
+           @(nextsco);
+         end  
+     ->done;
+   endtask
   
+  
+endclass
+ 
+/////////////////////////////////////////////////////
+ 
+ 
+class driver;
+  
+   virtual apb_if vif;
+   mailbox #(transaction) mbx;
+   transaction datac;
+  
+   event nextdrv;
+ 
+   function new(mailbox #(transaction) mbx);
+      this.mbx = mbx;
+   endfunction; 
+  
+  
+  task reset();
+    vif.presetn <= 1'b0;
+    vif.psel    <= 1'b0;
+    vif.penable <= 1'b0;
+    vif.pwdata  <= 0;
+    vif.paddr   <= 0;
+    vif.pwrite  <= 1'b0;
+    repeat(5) @(posedge vif.pclk);
+    vif.presetn <= 1'b1;
+    $display("[DRV] : RESET DONE");
+    $display("----------------------------------------------------------------------------");
+  endtask
+   
   task run();
     forever begin
       
-    gen2drv.get(tr);
-    repeat (2)@(posedge vif.clk);
-    
-    if(tr.pwrite==1)      //write operation
-      begin
-        vif.psel<=1'b1;
+      mbx.get(datac);
+      @(posedge vif.pclk);     
+      if(datac.pwrite == 1) ///write
+        begin
+        vif.psel    <= 1'b1;
+        vif.penable <= 1'b0;
+          vif.pwdata  <= datac.pwdata;
+          vif.paddr   <= datac.paddr;
+          vif.pwrite  <= 1'b1;
+            @(posedge vif.pclk);
+            vif.penable <= 1'b1; 
+            @(posedge vif.pclk); 
+            vif.psel <= 1'b0;
+            vif.penable <= 1'b0;
+            vif.pwrite <= 1'b0;
+            datac.display("DRV");
+            ->nextdrv;          
+        end
+      else if (datac.pwrite == 0) //read
+        begin
+            vif.psel <= 1'b1;
+        vif.penable <= 1'b0;
+          vif.pwdata <= 0;
+          vif.paddr <= datac.paddr;
+          vif.pwrite <= 1'b0;
+            @(posedge vif.pclk);
+            vif.penable <= 1'b1; 
+            @(posedge vif.pclk); 
+            vif.psel <= 1'b0;
+            vif.penable <= 1'b0;
+            vif.pwrite <= 1'b0;
+            datac.display("DRV"); 
+            ->nextdrv;
+        end
       
-        vif.penable<=1'b0;
-          vif.pwdata<=tr.pwdata;
-        vif.paddr<=tr.paddr;
-        vif.pwrite<=1'b1;
-        @(posedge vif.clk);
-        vif.penable<=1'b1;
-         @(posedge vif.clk);
-        vif.penable<=1'b0;
-        vif.pwrite<=1'b0;
-        vif.psel<=1'b0;
-        tr.display("DRV");
-         ->nextdrv;
-      end
-    
-      else if(tr.pwrite==0)      //wread operation
-      begin
-        vif.psel<=1'b1;
-    
-        vif.penable<=1'b0;
-              vif.pwdata<=0;
-        vif.paddr<=tr.paddr;
-      vif.pwrite<=1'b0;
-        @(posedge vif.clk);
-        vif.penable<=1'b1;
-         @(posedge vif.clk);
-        vif.penable<=1'b0;
-        vif.pwrite<=1'b0;
-        vif.psel<=1'b0;
-        $display("DRV");
-         ->nextdrv;
-      end
     end
-   
   endtask
   
-endclass 
-
   
+endclass
+ 
+ 
+//////////////////////////////////
+ 
+class monitor;
+ 
+   virtual apb_if vif;
+   mailbox #(transaction) mbx;
+   transaction tr;
+ 
   
+ 
+ 
+    function new(mailbox #(transaction) mbx);
+      this.mbx = mbx;     
+   endfunction;
   
-  class monitor;
-    transaction tr;
-    mailbox#(transaction )mon2sco;
-    virtual apb_if vif;
-    function new ( mailbox#(transaction )mon2sco);
-      this.mon2sco=mon2sco;
-      
-    endfunction
-    
-    task run();
-      tr=new();
-      forever begin
-        
-        repeat(1)@(posedge vif.clk);
-        if(vif.pready==1'b1)
-          begin
-            tr.pwdata  = vif.pwdata;
+  task run();
+    tr = new();
+    forever begin
+              @(posedge vif.pclk);
+              if(vif.pready)
+              begin
+              tr.pwdata  = vif.pwdata;
               tr.paddr   = vif.paddr;
             tr.pwrite  = vif.pwrite;
             tr.prdata  = vif.prdata;
             tr.pslverr = vif.pslverr;
-            @(posedge vif.clk);
-            tr.display("MON");
-            mon2sco.put(tr);
-        
-          end
+            @(posedge vif.pclk);
+              tr.display("MON");
+              mbx.put(tr);
               end
-    endtask
-    
-              
-    
-  endclass 
-                   
+              end
+   endtask
+ 
+ 
   
-  class scoreboard;
-    transaction tr;
-    mailbox#(transaction) mon2sco;
+endclass
+ 
+///////////////////////////////////////////////
+ 
+class scoreboard;
+  
+   mailbox #(transaction) mbx;
+   transaction tr;
    event nextsco;
-    bit [7:0]pwdata[16]='{default:0};;
-    bit [7:0]rdata;
-    int err=0;
-    
-    
-    function new(mailbox#(transaction)mon2sco);
-      this.mon2sco=mon2sco;
-      
-    endfunction
-    
-    task run();
-      forever begin
-        mon2sco.get(tr);
-        tr.display("SCO");
-        if((tr.pwrite==1'b1)&&(tr.pslverr==0))
-          begin
-            pwdata[tr.paddr]=tr.pwdata;
-            $display("[SCO]:DATA STORED DATA:%0d ADDR:%0d",tr.pwdata,tr.paddr);
-            
-            end
-        else if((tr.pwrite==1'b0)&&(tr.pslverr==0))
-          begin
-            rdata=pwdata[tr.paddr];
-            if(tr.prdata==rdata)
-              begin
-                $display("[sco]:DATA ,MATCHED");
-                
-              end
-            else
-              begin
-                err++;
-                $display("[sco]:DATA not MATCHED");
-                
-              end
-       
-            
-            end
-        else if(tr.pslverr==1'b1)
-          begin
-            $display("[SCO]:error detected");
-            
-          end
-        $display("------------------------------------------");
-            
-        ->nextsco;
-        
-      end
-    endtask
-    
-    
-  endclass
   
-  class environment;
+  bit [7:0] pwdata[16] = '{default:0};
+  bit [7:0] rdata;
+  int err = 0;
+  
+   function new(mailbox #(transaction) mbx);
+      this.mbx = mbx;     
+    endfunction;
+  
+  task run();
+  forever 
+      begin
+      
+      mbx.get(tr);
+      tr.display("SCO");
+      
+      if( (tr.pwrite == 1'b1) && (tr.pslverr == 1'b0))  ///write access
+        begin 
+        pwdata[tr.paddr] = tr.pwdata;
+        $display("[SCO] : DATA STORED DATA : %0d ADDR: %0d",tr.pwdata, tr.paddr);
+        end
+      else if((tr.pwrite == 1'b0) && (tr.pslverr == 1'b0))  ///read access
+        begin
+         rdata = pwdata[tr.paddr];    
+        if( tr.prdata == rdata)
+          $display("[SCO] : Data Matched");           
+        else
+          begin
+          err++;
+          $display("[SCO] : Data Mismatched");
+          end 
+        end 
+      else if(tr.pslverr == 1'b1)
+        begin
+          $display("[SCO] : SLV ERROR DETECTED");
+        end  
+      $display("---------------------------------------------------------------------------------------------------");
+      ->nextsco;
+ 
+  end
+    
+  endtask
+ 
+  
+endclass
+ 
+//////////////////////////////////////////////////////////
+ 
+class environment;
+ 
     generator gen;
-    monitor mon;
     driver drv;
-    scoreboard sco;
+    monitor mon;
+    scoreboard sco; 
+  
     
-     event nextgen2drv;
-     event nextmon2sco;
-    mailbox #(transaction)gen2drv;
-    mailbox#(transaction)mon2sco;
-    
-    
-    
+  
+    event nextgd; ///gen -> drv
+    event nextgs;  /// gen -> sco
+  
+  mailbox #(transaction) gdmbx; ///gen - drv
+     
+  mailbox #(transaction) msmbx;  /// mon - sco
+  
     virtual apb_if vif;
-    function new (virtual apb_if vif);
-      gen2drv=new();
-    mon2sco=new();
-      gen=new(gen2drv);
-      drv=new(gen2drv);
-      
-      mon=new(mon2sco);
-      sco=new(mon2sco);
-      
-       this.vif=vif;
-      drv.vif=this.vif;
-      mon.vif=this.vif;
-      
-      gen.nextdrv=nextgen2drv;
-      drv.nextdrv=nextgen2drv;
-      gen.nextsco=nextmon2sco;
-      sco.nextsco=nextmon2sco;
-    endfunction
+ 
+  
+  function new(virtual apb_if vif);
+       
+    gdmbx = new();
+    gen = new(gdmbx);
+    drv = new(gdmbx);
     
-    task pre_test ();
-      drv.reset();
-      
-    endtask
-    task test();
-      fork
-        gen.run();
-        drv.run();
-        mon.run();
-        sco.run();
-        
-      join_any
-    endtask
-    task post_test();
-      wait(gen.done.triggered);
-       $display("----Total number of Mismatch : %0d------",sco.err);
-      $finish();
-    endtask
     
-    task run();
-      pre_test();
-      test();
-      post_test();
-      
-    endtask
+    msmbx = new();
+    mon = new(msmbx);
+    sco = new(msmbx);
     
-  endclass
+    this.vif = vif;
+    drv.vif = this.vif;
+    mon.vif = this.vif;
+    
+    gen.nextsco = nextgs;
+    sco.nextsco = nextgs;
+    
+    gen.nextdrv = nextgd;
+    drv.nextdrv = nextgd;
+ 
+  endfunction
+  
+  task pre_test();
+    drv.reset();
+  endtask
+  
+  task test();
+  fork
+    gen.run();
+    drv.run();
+    mon.run();
+    sco.run();
+  join_any
+  endtask
+  
+  task post_test();
+    wait(gen.done.triggered);  
+    $display("----Total number of Mismatch : %0d------",sco.err);
+    $finish();
+  endtask
+  
+  task run();
+    pre_test();
+    test();
+    post_test();  
+  endtask
   
   
   
-  module testbench();
-    apb_if vif();
+endclass
+ 
+ 
+//////////////////////////////////////////////////
+ module tb;
+    
+   apb_if vif();
  
    
-   APB_ram dut (
-   vif.clk,
+   apb_s dut (
+   vif.pclk,
    vif.presetn,
-   vif.pwrite,
    vif.paddr,
-   vif.pwdata,
    vif.psel,
    vif.penable,
+   vif.pwdata,
+   vif.pwrite,
    vif.prdata,
    vif.pready,
    vif.pslverr
    );
    
     initial begin
-      vif.clk <= 0;
+      vif.pclk <= 0;
     end
     
-    always #10 vif.clk <= ~vif.clk;
+    always #10 vif.pclk <= ~vif.pclk;
     
     environment env;
     
@@ -342,6 +355,4 @@ endclass
     end
    
     
- 
   endmodule
-    
